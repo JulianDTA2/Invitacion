@@ -12,14 +12,6 @@ const isProcessing = ref(false);
 const isSending = ref(false);
 const totalEnviadosExito = ref(0);
 
-// --- FUNCIONES DE UTILIDAD ---
-
-const handleResetEmailCounter = () => {
-  if (confirm('¿Quieres poner el contador de ENVÍOS EXITOSOS a cero?')) {
-    totalEnviadosExito.value = 0;
-  }
-}
-
 const handleReset = () => {
   if (confirm('¿Estás seguro de reiniciar el contador de la SECUENCIA DE TICKETS a 00000?')) {
     eventStore.resetSequence();

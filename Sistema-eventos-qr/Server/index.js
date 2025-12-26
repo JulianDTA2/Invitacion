@@ -1,31 +1,16 @@
 require('dotenv').config();
 const express = require('express');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
+const QRCode = require('qrcode');
 
 const app = express();
 app.use(express.json({ limit: '50mb' })); 
 app.use(cors());
 
-// Función de espera (Anti-bloqueo Zoho)
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const resend = new Resend(process.env.RESEND_API_KEY || '');
 
-const transporter = nodemailer.createTransport({
-    host: "smtp.zoho.com",
-    port: 465,
-    secure: true,
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-    },
-});
-
-// Ruta al logo local
-const logoPath = path.join(__dirname, 'assets', 'logo.png');
-
-// --- 1. RUTA PARA ENVIAR CORREOS (Usa CIDs para adjuntos) ---
+// --- RUTA PARA ENVIAR CORREOS ---
 app.post('/send-emails', async (req, res) => {
     const { guests, eventConfig } = req.body;
     let successCount = 0;
@@ -33,115 +18,104 @@ app.post('/send-emails', async (req, res) => {
 
     console.log(`Iniciando envío a ${guests.length} invitados...`);
 
-    for (const guest of guests) {
+    for (const [index, guest] of guests.entries()) {
         try {
+            console.log(`Procesando ${index + 1}/${guests.length}: ${guest.email}`);
+
             const ticketType = (guest.ticketType || 'VIP').toUpperCase();
             
             // Colores dinámicos
             let ribbonColor = '#FF3D81'; 
             if (ticketType === 'VIP') ribbonColor = '#FFE45E'; 
-            if (ticketType === 'PLUS' || ticketType === 'REGULARPLUS') ribbonColor = '#00D3FF'; 
+            if (ticketType === 'PLUS' || ticketType === 'REGULAR +') ribbonColor = '#00D3FF'; 
 
-            const mailOptions = {
-                from: `"WoowTek Eventos" <${process.env.EMAIL_USER}>`,
-                to: guest.email,
+            // --- GENERACIÓN DE QR (CAMBIO CLAVE: Base64 Directo) ---
+            const codeText = guest.uniqueCode || 'INVALID-CODE';
+            
+            const qrDataURL = await QRCode.toDataURL(codeText, {
+                width: 250,
+                margin: 2,
+                color: {
+                    dark: '#000000',
+                    light: '#ffffff'
+                }
+            });
+
+            const data = await resend.emails.send({
+                from: 'WoowTek Eventos <noreply@woowtek.com>', 
+                to: [guest.email],
                 subject: `Tu Ticket para ${eventConfig.name}`,
-                html: getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, 'cid:logo-event', 'cid:unique-qr-code'),
-                attachments: [
-                    {
-                        filename: 'logo.png',
-                        path: logoPath,
-                        cid: 'logo-event'
-                    },
-                    {
-                        filename: 'ticket-qr.png',
-                        content: guest.qrImage.split("base64,")[1],
-                        encoding: 'base64',
-                        cid: 'unique-qr-code'
-                    }
-                ]
-            };
+                html: getHtmlTemplate(
+                    guest, 
+                    eventConfig, 
+                    ribbonColor, 
+                    ticketType, 
+                    'https://roboticminds.com.ec/registro/wp-content/uploads/2024/12/Sin-titulo-5-scaled-1024x377.png', 
+                    qrDataURL
+                ),
+            });
 
-            await transporter.sendMail(mailOptions);
-            console.log(`Enviado a: ${guest.email}`);
-            successCount++;
-
-            console.log("Esperando 4 segundos...");
-            await sleep(4000);
+            if (data.error) {
+                console.error(`Error Resend:`, data.error);
+                errorCount++;
+            } else {
+                console.log(`Enviado a: ${guest.email}`);
+                successCount++;
+            }
+            
+            if (index < guests.length - 1) await new Promise(r => setTimeout(r, 1100)); 
 
         } catch (error) {
-            console.error(`Error con ${guest.email}:`, error.message);
+            console.error(`Error fatal con ${guest.email}:`, error);
             errorCount++;
-            if(error.response && error.response.includes('5.4.6')) {
-                console.log("BLOQUEO DETECTADO. Parando.");
-                break; 
-            }
         }
     }
 
-    res.json({
-        message: 'Proceso finalizado',
-        stats: { success: successCount, errors: errorCount }
-    });
+    res.json({ message: 'Finalizado', stats: { success: successCount, errors: errorCount } });
 });
 
-// --- 2. RUTA PARA PREVISUALIZAR (Usa Base64 para navegador) ---
-app.post('/preview-email', (req, res) => {
+// --- RUTA PREVIEW ---
+app.post('/preview-email', async (req, res) => {
     const { guest, eventConfig } = req.body;
-
     try {
         const ticketType = (guest.ticketType || 'VIP').toUpperCase();
         let ribbonColor = '#FF3D81'; 
         if (ticketType === 'VIP') ribbonColor = '#FFE45E'; 
-        if (ticketType === 'PLUS' || ticketType === 'REGULARPLUS') ribbonColor = '#00D3FF';
+        if (ticketType === 'PLUS' || ticketType === 'REGULAR +') ribbonColor = '#00D3FF';
 
-        // Convertir Logo local a Base64
-        const logoBitmap = fs.readFileSync(logoPath);
-        const logoBase64 = `data:image/png;base64,${logoBitmap.toString('base64')}`;
+        const logoUrl = 'https://roboticminds.com.ec/registro/wp-content/uploads/2024/12/Sin-titulo-5-scaled-1024x377.png';
         
-        // Asegurar formato del QR
-        const qrBase64 = guest.qrImage.startsWith('data:') ? guest.qrImage : `data:image/png;base64,${guest.qrImage}`;
+        const codeText = guest.uniqueCode || 'PREVIEW-CODE';
+        const qrDataURL = await QRCode.toDataURL(codeText, { width: 250, margin: 2 });
 
-        // Generamos el HTML pasando los Base64 como fuentes
-        const html = getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoBase64, qrBase64, true);
-
+        const html = getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoUrl, qrDataURL, true);
         res.send(html);
-
     } catch (error) {
-        console.error("Error generando preview:", error);
         res.status(500).send("Error: " + error.message);
     }
 });
 
-// --- FUNCIÓN HELPER PARA NO REPETIR EL HTML ---
+// --- TEMPLATE HTML (EXACTAMENTE EL QUE PEDISTE) ---
 function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, qrSrc, isPreview = false) {
     const previewHeader = isPreview ? 
         `<div style="background:transparent;padding:10px;text-align:center;font-family:sans-serif;margin-bottom:20px;border-radius:8px;"><b>MODO PREVISUALIZACIÓN</b></div>` : '';
 
     return `
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Ticket</title>
   <style>
-    /* Reset básico */
     body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
     table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
     img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
-
-    /* MEDIA QUERIES PARA MÓVIL */
     @media screen and (max-width: 620px) {
       .container { width: 100% !important; max-width: 100% !important; }
       .mobile-p-15 { padding: 15px !important; }
       .stack { display: block !important; width: 100% !important; box-sizing: border-box !important; }
-      .rightCol {
-        border-left: none !important;
-        border-top: 4px solid #121217 !important;
-        margin-top: 15px !important;
-        padding-top: 15px !important;
-      }
+      .rightCol { border-left: none !important; border-top: 4px solid #121217 !important; margin-top: 15px !important; padding-top: 15px !important; }
       .logo-group { width: 100% !important; display: block !important; margin-bottom: 10px !important; }
       .logo-cell { display: inline-block !important; width: 48% !important; box-sizing: border-box !important; }
       .title-text { font-size: 24px !important; }
@@ -167,7 +141,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
               <td style="padding:15px;">
 
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" 
-                       style="background-color:#f7f7fb; border:4px solid #121217; border-radius:18px; overflow:hidden;">
+                       style="background-color:#f7f7fb; border:4px solid #121217; border-radius:18px; overflow:hidden; border-collapse: separate;">
                   <tr>
                     <td style="padding:0;">
                       
@@ -221,7 +195,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
 
                             <div style="height:15px; line-height:15px; font-size:15px;">&nbsp;</div>
 
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#ffffff; border:3px solid rgba(18,18,23,.15); border-radius:12px; box-shadow: 4px 4px 0 rgba(0,0,0,0.1);">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#ffffff; border:3px solid rgba(18,18,23,.15); border-radius:12px; box-shadow: 4px 4px 0 rgba(0,0,0,0.1); border-collapse: separate;">
                               <tr>
                                 <td style="padding:15px;">
                                   <div style="font-weight:900; font-size:16px; margin-bottom:5px; color:#121217;">¡Bienvenido! Estamos felices de tenerte aquí.</div>
@@ -237,7 +211,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                               <tr>
                                 <td style="width:50%; padding-right:7px;">
-                                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid #121217; border-radius:12px; box-shadow:4px 4px 0 #121217;">
+                                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid #121217; border-radius:12px; box-shadow:4px 4px 0 #121217; border-collapse: separate;">
                                     <tr>
                                       <td style="padding:10px;">
                                         <div style="font-size:10px; text-transform:uppercase; font-weight:900; color:#3a3a46;">Fecha</div>
@@ -247,7 +221,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
                                   </table>
                                 </td>
                                 <td style="width:50%; padding-left:7px;">
-                                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid #121217; border-radius:12px; box-shadow:4px 4px 0 #121217;">
+                                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid #121217; border-radius:12px; box-shadow:4px 4px 0 #121217; border-collapse: separate;">
                                     <tr>
                                       <td style="padding:10px;">
                                         <div style="font-size:10px; text-transform:uppercase; font-weight:900; color:#3a3a46;">Hora</div>
@@ -260,7 +234,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
                               <tr><td colspan="2" height="10" style="font-size:10px; line-height:10px;">&nbsp;</td></tr>
                               <tr>
                                 <td colspan="2">
-                                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid #121217; border-radius:12px; box-shadow:4px 4px 0 #121217;">
+                                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid #121217; border-radius:12px; box-shadow:4px 4px 0 #121217; border-collapse: separate;">
                                     <tr>
                                       <td style="padding:10px;">
                                         <div style="font-size:10px; text-transform:uppercase; font-weight:900; color:#3a3a46;">Ubicación</div>
@@ -286,7 +260,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
                           <td class="stack rightCol mobile-p-15" valign="top" style="width:40%; padding:15px; border-left:4px solid #121217; background-color:#ffffff;">
                             
                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" 
-                                   style="border:4px solid #121217; border-radius:14px; background:#fff; box-shadow:6px 6px 0 #121217;">
+                                   style="border:4px solid #121217; border-radius:14px; background:#fff; box-shadow:6px 6px 0 #121217; border-collapse: separate;">
                               <tr>
                                 <td align="center" style="padding:15px;">
                                   <div style="font-weight:900; font-size:11px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; color:#121217;">
@@ -308,7 +282,7 @@ function getHtmlTemplate(guest, eventConfig, ribbonColor, ticketType, logoSrc, q
 
                             <div style="height:15px; line-height:15px; font-size:15px;">&nbsp;</div>
 
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid rgba(18,18,23,.15); border-radius:12px; box-shadow: 4px 4px 0 rgba(0,0,0,0.1);">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fff; border:3px solid rgba(18,18,23,.15); border-radius:12px; box-shadow: 4px 4px 0 rgba(0,0,0,0.1); border-collapse: separate;">
                               <tr>
                                 <td style="padding:12px; font-size:11px; line-height:1.4; color:#3a3a46; font-weight:600;">
                                   <b style="color:#121217; display:block; margin-bottom:4px;">Reglas rápidas:</b>

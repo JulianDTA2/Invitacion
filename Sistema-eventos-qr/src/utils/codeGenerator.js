@@ -1,6 +1,6 @@
 const TICKET_TYPES = {
   'Regular': '001',
-  'RegularPlus': '002',
+  'Regular +': '002',
   'VIP': '003'
 };
 

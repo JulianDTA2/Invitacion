@@ -12,10 +12,10 @@ const headerColor = computed(() => {
   const typeStr = String(props.guest.ticketType || '').trim().toUpperCase();
 
   switch(typeStr) {
-    case 'VIP': return 'bg-yellow-500'; // Dorado
-    case 'REGULARPLUS': return 'bg-purple-600'; // Morado
-    case 'REGULAR': return 'bg-blue-600'; // Azul
-    default: return 'bg-gray-400'; // Gris si no se reconoce el tipo (para debug)
+    case 'VIP': return 'bg-yellow-500';
+    case 'REGULAR +': return 'bg-purple-600';
+    case 'REGULAR': return 'bg-blue-600';
+    default: return 'bg-gray-400';
   }
 });
 </script>
