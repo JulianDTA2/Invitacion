@@ -4,11 +4,11 @@ import { reactive, ref } from 'vue'
 export const useEventStore = defineStore('event', () => {
   const config = reactive({
     id: '001', 
-    name: 'Prueba Torneo',
-    address: 'Matriz Valle, Quito',
-    date: '15 de Diciembre, 2025',
-    time: '10:00 AM',
-    welcomeMsg: 'Mensaje detalle del evento. ¡Nos vemos allá!',
+    name: 'VIII TORNEO NACIONAL DE ROBÓTICA',
+    address: 'https://surl.li/olougg',
+    date: '23 y 24 de Enero, 2026',
+    time: '07:00 AM',
+    welcomeMsg: 'Te esperamos para vivir una experiencia de aprendizaje, creatividad y desafío.',
     assistanceMsg: 'Presenta este código QR en la entrada.'
   })
 
